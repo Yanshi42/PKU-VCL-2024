@@ -35,6 +35,7 @@ namespace VCX::Labs::GeometryProcessing {
                 auto v           = G.Vertex(i);
                 auto neighbors   = v->Neighbors();
                 // your code here:
+                
             }
             // We create an array to store indices of the newly generated vertices.
             // Note: newIndices[i][j] is the index of vertex generated on the "opposite edge" of j-th
