@@ -143,10 +143,35 @@ namespace VCX::Labs::GeometryProcessing {
 
         // Set boundary UVs for boundary vertices.
         // your code here: directly edit output.TexCoords
+        int maxi = input.Positions.size();
+        glm::vec2 boundPoint;
+        for(int i = 0; i < maxi; ++i) {
+            if(G.Vertex(i)->OnBoundary()) {
+                boundPoint = {input.Positions[i][0], input.Positions[i][1]};
+                output.TexCoords[i] = glm::normalize(boundPoint) / 2.0f + 0.5f;
+            }
+        }
 
         // Solve equation via Gauss-Seidel Iterative Method.
         for (int k = 0; k < numIterations; ++k) {
             // your code here:
+            int num = 0;
+            // glm::vec2 position = {0.0f, 0.0f};
+            for(int i = 0; i < maxi; ++i) {
+                auto vertex = G.Vertex(i);
+                auto vertexNeighbors = vertex->Neighbors();
+                int numNeighbors = vertexNeighbors.size();
+                if(vertex->OnBoundary()) {
+                    continue;
+                }
+                else {
+                    glm::vec2 position = {0.0f, 0.0f};
+                    for(int j = 0; j < numNeighbors; ++j) {
+                        position += output.TexCoords[vertexNeighbors[j]];
+                    }
+                    output.TexCoords[i] = position / float(numNeighbors);
+                }
+            }
         }
     }
 
@@ -172,7 +197,34 @@ namespace VCX::Labs::GeometryProcessing {
             [&G, &output] (DCEL::Triangle const * f) -> glm::mat4 {
                 glm::mat4 Kp;
                 // your code here:
-                return Kp;
+                glm::mat3 position{output.Positions[f->VertexIndex(0)], output.Positions[f->VertexIndex(1)], output.Positions[f->VertexIndex(2)]};
+                glm::vec3 tmp = {-1.0f, -1.0f, -1.0f};
+                // position = glm::transpose({output.Positions[f->VertexIndex(0)], output.Positions[f->VertexIndex(1)], output.Positions[f->VertexIndex(2)]});
+                // position = {output.Positions[f->VertexIndex(0)], output.Positions[f->VertexIndex(1)], output.Positions[f->VertexIndex(2)]};
+                // position = glm::inverse(glm::transpose(position));
+                position = glm::transpose(position);
+                position = glm::inverse(position);
+                tmp = position * tmp;
+                glm::vec4 ker = {tmp, 1.0f};
+                glm::vec4 zero = {0.0f, 0.0f, 0.0f, 0.0f};
+                glm::mat4 zeroMat = {zero, zero, zero, zero};
+                int threshold = 1000;
+                double length = sqrt(glm::dot(tmp, tmp));
+                if(length >= threshold) {
+                    return zeroMat;
+                }
+                else {
+                    ker = ker * (1.0f / float(length));
+                    Kp = glm::outerProduct(ker, ker);
+                    // Kp = {
+                    //     ker[0]*ker[0], ker[0]*ker[1], ker[0]*ker[2], ker[0]*ker[3], 
+                    //     ker[1]*ker[0], ker[1]*ker[1], ker[1]*ker[2], ker[1]*ker[3], 
+                    //     ker[2]*ker[0], ker[2]*ker[1], ker[2]*ker[2], ker[2]*ker[3], 
+                    //     ker[3]*ker[0], ker[3]*ker[1], ker[3]*ker[2], ker[3]*ker[3]
+                    // };
+                    return Kp;
+                }
+                // return Kp;
             }
         };
 
@@ -192,7 +244,44 @@ namespace VCX::Labs::GeometryProcessing {
                 glm::mat4 const & Q
             ) -> ContractionPair {
                 // your code here:
-                return {};
+                glm::mat4 const & Qq = {
+                    Q[0][0], Q[1][0], Q[2][0], 0.0f,
+                    Q[0][1], Q[1][1], Q[2][1], 0.0f,
+                    Q[0][2], Q[1][2], Q[2][2], 0.0f,
+                    Q[0][3], Q[1][3], Q[2][3], 1.0f,
+                };
+                const float thresholdQq = 0.001f;
+                ContractionPair out;
+                out.edge = edge;
+                if(glm::determinant(Qq) > thresholdQq) {
+                    glm::vec4 kernel = {0.0f, 0.0f, 0.0f, 1.0f};
+                    glm::vec4 targetPosition=glm::inverse(Qq) * kernel;
+                    out.targetPosition=targetPosition;
+                    out.cost=glm::dot(targetPosition, Q * targetPosition);
+                }
+                else {
+                    // To be continued... 11.5
+                    glm::vec4 beg = {p2, 1.0f};
+                    glm::vec4 end = {p1, 1.0f};
+                    glm::vec4 mid = (beg + end) / 2.0f;
+                    double t1, t2, t3;
+                    t1 = glm::dot(end, Q * end);
+                    t2 = glm::dot(beg, Q * beg);
+                    if(t1 >= t2) {
+                        out.targetPosition = beg;
+                        out.cost = t2;
+                    }
+                    else {
+                        out.targetPosition = end;
+                        out.cost = t1;
+                    }
+                    t3 = glm::dot(mid, Q * mid);
+                    if(t3 <= out.cost) {
+                        out.targetPosition = mid;
+                        out.cost = t3;
+                    }
+                }
+                return out;
             }
         };
 
@@ -275,16 +364,38 @@ namespace VCX::Labs::GeometryProcessing {
             for (auto e : ring) {
                 // your code here:
                 //     1. Compute the new Kp matrix for $e->Face()$.
+                auto newQ = UpdateQ(e->Face());
+                auto preQ = Kf[G.IndexOf(e->Face())];
                 //     2. According to the difference between the old Kp (in $Kf$) and the new Kp (computed in step 1),
                 //        update Q matrix of each vertex on the ring (update $Qv$).
+                auto deltaQ = newQ - preQ;
+                Qv[e->From()] += deltaQ;
+                Qv[e->To()] += deltaQ;
                 //     3. Update Q matrix of vertex v1 as well (update $Qv$).
+                Qv[v1] += newQ;
                 //     4. Update $Kf$.
+                Kf[G.IndexOf(e->Face())] = newQ;
             }
 
             // Finally, as the Q matrix changed, we should update the relative $ContractionPair$ in $pairs$.
             // Any pair with the Q matrix of its endpoints changed, should be remade by $MakePair$.
             // your code here:
-
+            for(auto edge : ring) {
+                auto vertexBeg = edge->From();
+                auto ringBeg = G.Vertex(vertexBeg)->Ring();
+                for (auto edgeBeg : ringBeg) {
+                    bool test = G.IsContractable(edgeBeg->NextEdge());
+                    if(test) {
+                        auto vertexEnd = edgeBeg->To();
+                        auto pair11= MakePair(edgeBeg->NextEdge(), output.Positions[vertexEnd], output.Positions[vertexBeg], Qv[vertexEnd] + Qv[vertexBeg]);
+                        pairs[pair_map[G.IndexOf(edgeBeg->NextEdge())]].targetPosition = pair11.targetPosition;
+                        pairs[pair_map[G.IndexOf(edgeBeg->NextEdge())]].cost = pair11.cost; 
+                    }
+                    else {
+                        pairs[pair_map[G.IndexOf(edgeBeg->NextEdge())]].edge = nullptr;
+                    }
+                }
+            }
         }
 
         // In the end, we check if the result mesh is watertight and manifold.
