@@ -413,7 +413,17 @@ namespace VCX::Labs::GeometryProcessing {
         static constexpr auto GetCotangent {
             [] (glm::vec3 vAngle, glm::vec3 v1, glm::vec3 v2) -> float {
                 // your code here:
-                return 0.0f;
+                glm::vec3 m1 = v1 - vAngle;
+                glm::vec3 m2 = v2 - vAngle;
+                double sine = sqrt(glm::dot(glm::cross(m1, m2), glm::cross(m1, m2)));
+                double cosine = glm::dot(m1, m2);
+                double sum = sqrt(sine * sine + cosine * cosine);
+                float threshold = sum * 1.0e-3f;
+                sine = (sine <= threshold) ? threshold : sine;
+                double arctangent = cosine / sine;
+                arctangent = (arctangent < 0) ? 0 : arctangent;
+                // return abs(arctangent);
+                return arctangent;
             }
         };
 
@@ -434,6 +444,40 @@ namespace VCX::Labs::GeometryProcessing {
             Engine::SurfaceMesh curr_mesh = prev_mesh;
             for (std::size_t i = 0; i < input.Positions.size(); ++i) {
                 // your code here: curr_mesh.Positions[i] = ...
+                auto vertex = G.Vertex(i);
+                glm::vec3 result{0.0f, 0.0f, 0.0f};
+                float sum = 1.0f;
+                if(useUniformWeight) {
+                    auto neighbors = vertex->Neighbors();
+                    int sizeNeighbors = neighbors.size();
+                    for(size_t j = 0; j < sizeNeighbors; ++j) {
+                        result = result + prev_mesh.Positions[neighbors[j]];
+                    }
+                    result = result / float(sizeNeighbors);
+                    curr_mesh.Positions[i] = lambda * result + prev_mesh.Positions[i] * (sum - lambda);
+                }
+                else {
+                    auto reverseHE = vertex->Ring();
+                    int sizeReverseHE = reverseHE.size();
+                    float s = 0.0f;
+                    for(size_t j = 0; j < sizeReverseHE; ++j) {
+                        auto halfedge = reverseHE[j];
+                        auto beg = halfedge->From();
+                        auto end = halfedge->To();
+                        float cotangent1 = GetCotangent(prev_mesh.Positions[beg], 
+                                                        prev_mesh.Positions[i], 
+                                                        prev_mesh.Positions[end]);
+                        float cotangent2 = GetCotangent(prev_mesh.Positions[end], 
+                                                        prev_mesh.Positions[i], 
+                                                        prev_mesh.Positions[beg]);
+                        result = result +   cotangent1 * prev_mesh.Positions[end] + 
+                                            cotangent2 * prev_mesh.Positions[beg];
+                        s = s + cotangent1 + cotangent2;
+                    }
+                    result = result / s;
+                    curr_mesh.Positions[i] = lambda * result + prev_mesh.Positions[i] * (sum - lambda);
+                    // curr_mesh.Positions[i] = lambda * result + prev_mesh.Positions[i] * (1.0f - lambda);
+                }
             }
             // Move curr_mesh to prev_mesh.
             prev_mesh.Swap(curr_mesh);
