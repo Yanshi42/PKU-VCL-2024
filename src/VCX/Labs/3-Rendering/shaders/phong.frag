@@ -56,7 +56,7 @@ vec3 Shade(vec3 lightIntensity, vec3 lightDir, vec3 normal, vec3 viewDir, vec3 d
         return Ls + Ld;
     }
     else {
-
+        returnu vec3(0);
     }
 }
 
