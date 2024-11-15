@@ -4,7 +4,9 @@
 #include <spdlog/spdlog.h>
 
 #include "Engine/Scene.h"
+#include "Labs/3-Rendering/intersect.h"
 #include "Labs/3-Rendering/Ray.h"
+#include "Labs/3-Rendering/BVH.h"
 
 namespace VCX::Labs::Rendering {
 
@@ -15,12 +17,6 @@ namespace VCX::Labs::Rendering {
     glm::vec4 GetTexture(Engine::Texture2D<Engine::Formats::RGBA8> const & texture, glm::vec2 const & uvCoord);
 
     glm::vec4 GetAlbedo(Engine::Material const & material, glm::vec2 const & uvCoord);
-
-    struct Intersection {
-        float t, u, v; // ray parameter t, barycentric coordinates (u, v)
-    };
-
-    bool IntersectTriangle(Intersection & output, Ray const & ray, glm::vec3 const & p1, glm::vec3 const & p2, glm::vec3 const & p3);
 
     struct RayHit {
         bool              IntersectState;
@@ -95,9 +91,99 @@ namespace VCX::Labs::Rendering {
     };
 
     /* Optional: write your own accelerated intersector here */
+struct BVHRayIntersector {
+    Engine::Scene const * InternalScene = nullptr;
+    BVH                   bvh;
 
-    using RayIntersector = TrivialRayIntersector;
+    BVHRayIntersector() = default;
+
+    // 初始化
+    void InitScene(Engine::Scene const * scene) {
+        InternalScene = scene;
+
+        if (!InternalScene) {
+            spdlog::warn("BVHRayIntersector::InitScene: No scene provided.");
+            return;
+        }
+
+        // 预留内存
+        size_t totalFaces = 0;
+        for (const auto & model : InternalScene->Models) {
+            totalFaces += model.Mesh.Indices.size() / 3;
+        }
+
+        std::vector<BVH::Face> faces;
+        faces.reserve(totalFaces);
+
+        // 收集mesh
+        for (const auto & model : InternalScene->Models) {
+            const auto & indices = model.Mesh.Indices;
+            for (size_t i = 0; i < indices.size(); i += 3) {
+                faces.emplace_back(&model, indices.data() + i);
+            }
+        }
+
+        // 构建BVH
+        bvh.Clear();
+        bvh.Build(faces);
+    }
+
+    RayHit IntersectRay(Ray const & ray) const {
+        RayHit result;
+
+        if (!InternalScene) {
+            spdlog::warn("BVHRayIntersector::IntersectRay: Uninitialized intersector.");
+            result.IntersectState = false;
+            return result;
+        }
+
+        Intersection its;
+        BVH::Face hitFace;
+
+        // 确定最近相交
+        if (!bvh.FindIntersection(its, hitFace, ray)) {
+            result.IntersectState = false;
+            return result;
+        }
+
+        const auto & model = *hitFace.model;
+        const auto & indices = hitFace.indice;
+        const auto & positions = model.Mesh.Positions;
+        const auto & normals = model.Mesh.IsNormalAvailable() ? model.Mesh.Normals : model.Mesh.ComputeNormals();
+        const auto & texcoords = model.Mesh.IsTexCoordAvailable() ? model.Mesh.TexCoords : model.Mesh.GetEmptyTexCoords();
+
+        // 获取点面
+        glm::vec3 p1 = positions[indices[0]];
+        glm::vec3 p2 = positions[indices[1]];
+        glm::vec3 p3 = positions[indices[2]];
+
+        glm::vec3 n1 = normals[indices[0]];
+        glm::vec3 n2 = normals[indices[1]];
+        glm::vec3 n3 = normals[indices[2]];
+
+        glm::vec2 uv1 = texcoords[indices[0]];
+        glm::vec2 uv2 = texcoords[indices[1]];
+        glm::vec2 uv3 = texcoords[indices[2]];
+
+        // 计算纹理
+        float w1 = 1.0f - its.u - its.v;
+        glm::vec2 uvCoord = w1 * uv1 + its.u * uv2 + its.v * uv3;
+        result.IntersectPosition = w1 * p1 + its.u * p2 + its.v * p3;
+        result.IntersectNormal = glm::normalize(w1 * n1 + its.u * n2 + its.v * n3);
+        const auto & material = InternalScene->Materials[model.MaterialIndex];
+        result.IntersectMode = material.Blend;
+        result.IntersectAlbedo = GetAlbedo(material, uvCoord);
+        result.IntersectMetaSpec = GetTexture(material.MetaSpec, uvCoord);
+
+        result.IntersectState = true;
+        return result;
+    }
+};
+
+
+    using RayIntersector = BVHRayIntersector;
 
     glm::vec3 RayTrace(const RayIntersector & intersector, Ray ray, int maxDepth, bool enableShadow);
 
-} // namespace VCX::Labs::Rendering
+}
+// namespace VCX::Labs::Rendering
